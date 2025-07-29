@@ -2,6 +2,14 @@
 
 Este proyecto proporciona herramientas para visualizar, procesar y extraer características de un EEG, además de etiquetar ventanas de tiempo mediante agrupación (clustering).
 
+## Índice
+- [Instalación](#instalacion)
+- [Uso](#uso)
+    - [Opciones disponibles](#opciones-disponibles)
+    - [Plots disponibles para visualizar](#plots-disponibles-para-visualizar)
+    - [Archivos disponibles para guardar](#archivos-disponibles-para-guardar)
+- [Ejemplos de uso](#ejemplos-de-uso)
+
 ## Instalación
 
 Primero, instalar las dependencias con (es altamente recomendado hacerlo con conda):
