@@ -107,4 +107,4 @@ Es posible importar los datos desde .fif o .h5. Si se importa desde .fif, es nec
 ```bash
 python main.py -f clustering -v
 ```
-Si se desea visualizar el EEG final (`-v`, `--visualize` o `--plot_f`), es necesario añadir el argumento `-m` o `--montage`, si no, por defecto se aplica el montaje average.
+Si se desea visualizar el EEG final (`-v`, `--visualize` o `--plot_f`), y se importa el archivo desde .fif, es necesario añadir el argumento `-m` o `--montage`, si no, por defecto se aplica el montaje average.
