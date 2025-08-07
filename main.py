@@ -15,7 +15,6 @@ import h5py
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score
-from sklearn.manifold import TSNE
 import umap
 import hdbscan
 
@@ -24,15 +23,11 @@ from features import *
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning, message=".*force_all_finite.*")
+warnings.filterwarnings("ignore", category=UserWarning, message=".*Graph is not fully connected.*")
+warnings.filterwarnings("ignore", category=UserWarning, message=".*Exited postprocessing.*")
+warnings.filterwarnings("ignore", category=UserWarning, message=".*Exited at iteration.*")
+warnings.filterwarnings("ignore", category=UserWarning, message=".*Failed at iteration.*")
 
-"""
-Guía de colores:
-----------------
-Blanco: Por defecto
-Verde: Información (prints)
-Amarillo: Información interpolada (f-strings)
-Cian: Progresos
-"""
 
 init(autoreset=True)
 
@@ -64,8 +59,14 @@ def parse_args():
     parser.add_argument("--dim_reduction", "-r",
                         type=str, default="multichannel", choices=["multichannel", "average"],
                         help="Type of dimensionality reduction after features calculation: multichannel " \
-                        "(don't apply, each channel is passed as feature), averafe (reduce channel information by mean and std) " \
+                        "(don't apply, each channel is passed as feature), average (reduce channel information by mean and std) " \
                         "(default 'multichannel')")
+    parser.add_argument("--var_selection",
+                        type=str, default=None, nargs="+",
+                        help="Name of the type features to be calculated: 'statistical', 'autocorrelation', 'band_power', 'entropy', " \
+                        "'hjorth', 'fractal', 'bispectrum', 'wavelets', 'functional_connectivity'. By default, all features are calculated.")
+    
+    # statistical autocorrelation band_power hjorth fractal wavelets functional_connectivity
     
     return parser.parse_args()
 
@@ -86,7 +87,9 @@ def measure_time(alias=None):
 
 
 class EEGProcessor:
-    def __init__(self, visualize=False, montage="average", select_ecg=False, plot_final=False, save=None, epoch_duration=10, dim_reduction="average"):
+    def __init__(
+            self, visualize=False, montage="average", select_ecg=False, plot_final=False, save=None, epoch_duration=10, dim_reduction="average",
+            var_selection=None):
         self.visualize = visualize
         self.montage = montage
         self.select_ecg = select_ecg
@@ -94,7 +97,7 @@ class EEGProcessor:
         self.save = save
         self.epoch_duration = epoch_duration
         self.dim_reduction = dim_reduction
-
+        self.var_selection = var_selection if var_selection is not None else list(FEATURE_MAP_NAMES.keys())
 
         self.epoch_overlap = self.epoch_duration/2
         self.ch_names = None
@@ -103,13 +106,16 @@ class EEGProcessor:
 
     def load_eeg(self):
         # Ask for a file
-        filename = fd.askopenfilename(title="Select a file",
-                                      filetypes=[("EDF files", "*.edf")])  
+        filename = fd.askopenfilename(
+            title="Select a file", filetypes=[("EDF files", "*.edf")])  
         
         print(f"{GREEN}Loaded file: {YELLOW}{filename}\n{RESET}")
 
         raw = mne.io.read_raw_edf(filename, preload=True, verbose=0)  # Read file
-        raw.drop_channels(["ROC", "LOC", "25", "26", "27", "28", "29", "30", "31", "32", "DC", "OSat", "PR", "A1", "A2"])  # Drop channels
+        raw.pick_channels(
+            ["Fp1", "Fp2", "F3", "F4", "C3", "C4", "P3", "P4", "O1", "O2", "F7",
+            "F8", "T3", "T4", "T5", "T6", "Fz", "Cz", "Pz", "EKG"])  # Pick channels
+        raw.reorder_channels(sorted(raw.ch_names))
         raw.set_channel_types({'EKG': 'ecg'})  # Change "EKG" channel to "ecg"
         raw.set_montage("standard_1020")
         
@@ -125,10 +131,11 @@ class EEGProcessor:
 
 
     def pre_filter_raw(self, raw, hpf=0.5, lpf=70, notch=50):
-        print(f"{GREEN}Filtering EEG:\n" + \
-              f"- HPF = {YELLOW}{hpf}{GREEN} Hz\n" + \
-              f"- LPF = {YELLOW}{lpf}{GREEN} Hz\n" + \
-              f"- Notch = {YELLOW}{notch}{GREEN} Hz\n{RESET}")
+        print(
+            f"{GREEN}Filtering EEG:\n" + \
+            f"- HPF = {YELLOW}{hpf}{GREEN} Hz\n" + \
+            f"- LPF = {YELLOW}{lpf}{GREEN} Hz\n" + \
+            f"- Notch = {YELLOW}{notch}{GREEN} Hz\n{RESET}")
         raw.filter(l_freq=hpf, h_freq=lpf)
         raw.notch_filter(freqs=notch)
 
@@ -141,8 +148,9 @@ class EEGProcessor:
     @measure_time(alias="Artifact correction")
     def artifact_correction(self, raw):
         print(f"{GREEN}Removing Artifacts:\n{RESET}")
-        epochs = mne.make_fixed_length_epochs(raw.pick(["eeg"] + (["ecg"] if self.select_ecg else [])),
-                                              duration=self.epoch_duration, overlap=self.epoch_overlap, preload=True)
+        epochs = mne.make_fixed_length_epochs(
+            raw.pick(["eeg"] + (["ecg"] if self.select_ecg else [])),
+            duration=self.epoch_duration, overlap=self.epoch_overlap, preload=True)
         
         # 1. Autoreject
         print(f"{GREEN}Phase 1: {YELLOW}Autoreject{GREEN} before ICA\n{RESET}")
@@ -167,7 +175,7 @@ class EEGProcessor:
 
         if self.select_ecg:
             ecg_idx, ecg_scores = ica.find_bads_ecg(epochs[~reject_log.bad_epochs])
-            print(f"ICA components corresponding to ECG: {YELLOW}{', '.join(map(str, ecg_idx))}\n{RESET}")
+            print(f"{GREEN}ICA components corresponding to ECG: {YELLOW}{', '.join(map(str, ecg_idx))}\n{RESET}")
             if self.visualize:
                 ica.plot_scores(ecg_scores, exclude=ecg_idx)
         else:
@@ -183,8 +191,8 @@ class EEGProcessor:
             reject_log.plot('horizontal', aspect="auto")
             epochs_clean.plot(n_epochs=1, block=True)
         
-        if 'ECG' in epochs_clean.ch_names:
-            epochs_clean.drop_channels(['ECG'])
+        if 'EKG' in epochs_clean.ch_names:
+            epochs_clean.drop_channels(['EKG'])
         if self.save:
             print(f"{GREEN}Saving corrected EEG into {YELLOW}{self.save}-epo.fif\n{RESET}")
             epochs_clean.save(f"{self.save}-epo.fif", overwrite=True)
@@ -215,7 +223,11 @@ class EEGProcessor:
 
     def normalize(self, data):
         print(f"{GREEN}Standardizing data{RESET}")
-        return (data - data.mean())/data.std()
+        print(data.shape)
+        mean = data.mean(axis=(1, 2), keepdims=True)
+        std = data.std(axis=(1, 2), keepdims=True)
+        print(mean.shape, std.shape)
+        return (data - mean)/std
     
 
     def pre_process(self, epochs):
@@ -232,9 +244,9 @@ class EEGProcessor:
     def get_features(self, data_norm=None):
         print(f"{GREEN}Calculating Features:\n{RESET}")
         if data_norm is None:
-            filename = fd.askopenfilename(title="Select a file",
-                                          filetypes=[("FIF files", "*.fif"),
-                                                     ("H5 files", "*.h5")])
+            filename = fd.askopenfilename(
+                title="Select a file",
+                filetypes=[("FIF files", "*.fif"), ("H5 files", "*.h5")])
             print(f"{GREEN}Loaded file: {YELLOW}{filename}\n{RESET}")
             if ".fif" in filename:
                 epochs = mne.read_epochs(filename, preload=True)
@@ -242,8 +254,9 @@ class EEGProcessor:
             else:
                 with h5py.File(filename, "r") as f:
                     data_norm = f["data"][:]
-                filename = fd.askopenfilename(title="Select a file (metadata)",
-                                              filetypes=[("JSON files", "*.json")])
+                filename = fd.askopenfilename(
+                    title="Select a file (metadata)",
+                    filetypes=[("JSON files", "*.json")])
                 print(f"{GREEN}Loaded file: {YELLOW}{filename}\n{RESET}")
                 with open(filename, "r") as f:
                     metadata = json.load(f)
@@ -252,10 +265,14 @@ class EEGProcessor:
 
         features = {}
         param_context = {"fs": self.fs, "ch_names": self.ch_names}
-        for (calc_feature, params), feature_type in zip(FEATURES_LIST, FEATURE_TYPES):
-            kwargs = {name: param_context[name] for name in params}
-            feature_metric = calc_feature(data_norm, **kwargs)
-            features.update(get_features(feature_metric, self.dim_reduction, feature_type=feature_type))
+        for feature in self.var_selection:
+            if feature in FEATURE_MAP_NAMES:
+                calc_feature, params = FEATURES_LIST[FEATURE_MAP_NAMES[feature]]
+                feature_type = FEATURE_TYPES[FEATURE_MAP_NAMES[feature]]
+
+                kwargs = {name: param_context[name] for name in params}
+                feature_metric = calc_feature(data_norm, **kwargs)
+                features.update(get_features(feature_metric, self.dim_reduction, feature_type=feature_type))
             
         features_df = pd.DataFrame(features)
         if self.save:
@@ -268,12 +285,13 @@ class EEGProcessor:
     @measure_time(alias="Clustering")
     def clustering(self, X=None, random_state=28):
         if X is None:
-            filename = fd.askopenfilename(title="Select a file",
-                                          filetypes=[("CSV files", "*.csv")])
+            filename = fd.askopenfilename(
+                title="Select a file",
+                filetypes=[("CSV files", "*.csv")])
             print(f"{GREEN}Loaded file: {YELLOW}{filename}\n{RESET}")
             X = pd.read_csv(filename, index_col=0)
 
-        umap_n_neighbours_list = [2, 3, 5, 10, 25, 50, 100, len(X.columns)//2, len(X.columns)]
+        umap_n_neighbours_list = [2, 3, 5, 7, 10, 20]
         umap_min_dist_list = [0, 0.1, 0.2, 0.3, 0.5, 0.7]
         umap_n_components_list = [2, 5, 10, 30, 70, 100]
         hdbscan_min_cluster_size_list = [5, 10, 20, 50, 75, 100]
@@ -319,13 +337,13 @@ class EEGProcessor:
                                 best_umap_embedding = X_umap
                                 best_clusterer = clusterer
                                 
-                                print(f"{GREEN}\nNew best score{RESET}")
+                                print(f"\nNew best score")
                                 colored_items = []
                                 for k, v in best_config.items():
-                                    colored_items.append(f"{GREEN}{k} = {YELLOW}{v}{RESET}")
+                                    colored_items.append(f"{k} = {v}")
                                 colored_dict_str = ", ".join(colored_items)
                                 print(f"{colored_dict_str}:")
-                                print(f"{GREEN}Silhouette score = {YELLOW}{best_score}{RESET}")
+                                print(f"Silhouette score = {best_score}")
         
         # Dendogram
         if self.visualize:
@@ -335,12 +353,9 @@ class EEGProcessor:
             plt.show()
         
         if self.visualize or self.plot_final:
-            # Cluster visualization (t-SNE)
-            tsne = TSNE(n_components=2, random_state=random_state)
-            X_tsne = tsne.fit_transform(best_umap_embedding)
-
+            # Cluster visualization
             plt.figure(figsize=(10, 6))
-            sns.scatterplot(x=X_tsne[:,0], y=X_tsne[:,1], hue=best_labels, palette='tab10', s=50)
+            sns.scatterplot(x=best_umap_embedding[:, 0], y=best_umap_embedding[:, 1], hue=best_labels, palette='tab10')
             plt.title("Cluster visualization (best configuration)")
             plt.legend(title="Cluster")
             plt.show()
@@ -348,9 +363,9 @@ class EEGProcessor:
             # Classified epochs
             # Get Epochs object from data
             if self.ch_names is None or self.fs is None:
-                filename = fd.askopenfilename(title="Select a file",
-                                              filetypes=[("FIF files", "*.fif"),
-                                                         ("H5 files", "*.h5")])
+                filename = fd.askopenfilename(
+                    title="Select a file",
+                    filetypes=[("FIF files", "*.fif"), ("H5 files", "*.h5")])
                 print(f"{GREEN}Loaded file: {YELLOW}{filename}\n{RESET}")
                 if ".fif" in filename:
                     epochs = mne.read_epochs(filename, preload=True)
@@ -367,15 +382,18 @@ class EEGProcessor:
                         self.fs = metadata["fs"]
             
             info = mne.create_info(ch_names=self.ch_names, sfreq=self.fs, ch_types="eeg")
-            n_epochs = data.shape[0]
-            events = np.column_stack((np.arange(0, n_epochs * self.fs, self.fs), np.zeros(n_epochs, dtype=int), best_labels + 1)).astype(int)
-            event_id = {"label_1": 1, "label_2": 2}
-            epochs = mne.EpochsArray(data, info, events=events, event_id=event_id, tmin=0, on_missing="ignore")
+            epochs = mne.EpochsArray(data, info)
 
+            unique_labels = np.unique(best_labels)
+            figures = []
+            for label_value in unique_labels:
+                mask = best_labels == label_value
+                epochs_subset = epochs[mask]
 
-            event_color = {1: "lightcoral", 2: "lightgreen"}
-            epochs.plot(event_color=event_color, scalings="auto", events=events)
-            plt.show()
+                fig = epochs_subset.plot(title=f'Label= {label_value}', show=False, scalings="auto")
+                figures.append(fig)
+
+            plt.show(block=True)
 
         if self.save:
             print(f"{GREEN}Saving Labels into {YELLOW}{self.save}_cluster_labels.csv\n{RESET}")
@@ -383,7 +401,7 @@ class EEGProcessor:
             best_labels_df.to_csv(f"{self.save}_cluster_labels.csv")
 
         return best_labels
-        
+
 
     def run(self):
         raw = self.load_eeg()
@@ -424,8 +442,9 @@ class EEGProcessor:
 if __name__ == "__main__":
     os.system("cls")
     args = parse_args()
-    processor = EEGProcessor(visualize=args.visualize, montage=args.montage, select_ecg=args.sel_ecg, plot_final=args.plot_f, save=args.save,
-                             epoch_duration=args.epoch_duration, dim_reduction=args.dim_reduction)
+    processor = EEGProcessor(
+        visualize=args.visualize, montage=args.montage, select_ecg=args.sel_ecg, plot_final=args.plot_f, save=args.save,
+        epoch_duration=args.epoch_duration, dim_reduction=args.dim_reduction, var_selection=args.var_selection)
 
     match args.function:
         case "run":

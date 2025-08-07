@@ -42,7 +42,9 @@ def get_features(metrics, dim_reduction, feature_type=None):
                 for metric, values in metrics.items():
                     values = np.array(values)
                     for ch in range(values.shape[1]):
-                        features_[f"{metric}_ch_{ch+1}"] = values[:,ch,i]
+                        features_[f"{metric}_ch_{ch+1}"] = values[:,ch]
+                
+                return features_
             
             if feature_type == "Wavelet":
                 for metric, values in metrics.items():
@@ -373,3 +375,13 @@ FEATURES_LIST = [(calc_statistical, []),
                  (calc_functional_connectivity, ["ch_names"])]
 
 FEATURE_TYPES = [None, None, None, None, None, None, None, "Wavelet", "FC"]
+
+FEATURE_MAP_NAMES = {"statistical": 0,
+                     "autocorrelation": 1,
+                     "band_power": 2,
+                     "entropy": 3,
+                     "hjorth": 4,
+                     "fractal": 5,
+                     "bispectrum": 6,
+                     "wavelets": 7,
+                     "functional_connectivity": 8}
