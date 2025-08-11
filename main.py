@@ -40,10 +40,10 @@ def parse_args():
     parser.add_argument("--montage", "-m",
                         type=str, default="average", choices=["bipolar", "average", "laplacian"],
                         help='Type of montage to apply (default: Average)')
-    parser.add_argument("--function", "-f",  type=str, default='run', choices=['run', 'inspect', 'correct', "features", "clustering"],
+    parser.add_argument("--function", "-f",  type=str, default='run', choices=['run', 'inspect', 'correct', "features", "clustering", "labels"],
                         help="Execution mode: run (full pipeline), inspect (just load & filter & plot), " \
                         "correct (Run the artifact correction algorithm), features (Calculate the features vector), " \
-                        "clustering (Label epochs by unsupervised clustering) (default 'run')")
+                        "clustering (Label epochs by unsupervised clustering), labels (Create ground-truth labels) (default 'run')")
     parser.add_argument("--sel_ecg",
                         action="store_true",
                         help="Option to select ECG for artifact correction")
@@ -112,9 +112,42 @@ class EEGProcessor:
         print(f"{GREEN}Loaded file: {YELLOW}{filename}\n{RESET}")
 
         raw = mne.io.read_raw_edf(filename, preload=True, verbose=0)  # Read file
-        raw.pick_channels(
-            ["Fp1", "Fp2", "F3", "F4", "C3", "C4", "P3", "P4", "O1", "O2", "F7",
-            "F8", "T3", "T4", "T5", "T6", "Fz", "Cz", "Pz", "EKG"])  # Pick channels
+
+        if "EKG" in raw.ch_names:  # Channel EKG for ECG
+            raw.pick_channels(
+                ["Fp1", "Fp2", "F3", "F4", "C3", "C4", "P3", "P4", "O1", "O2", "F7",
+                "F8", "T3", "T4", "T5", "T6", "Fz", "Cz", "Pz", "EKG"])  # Pick channels
+        else:  # Channels ECG1 and ECG2
+            ecg_data = raw.copy().pick_channels(["ECG1", "ECG2"]).get_data()
+            ecg = ecg_data.mean(axis=0, keepdims=True)
+
+            info = mne.create_info(ch_names=["EKG"], sfreq=raw.info['sfreq'], ch_types=['ecg'])
+            ecg_raw = mne.io.RawArray(ecg, info)
+
+            raw.drop_channels(["ECG1", "ECG2"])
+            raw.add_channels([ecg_raw])
+
+            rename_dict = {
+                "FP1": "Fp1",
+                "FP2": "Fp2",
+                "FZ": "Fz",
+                "CZ": "Cz",
+                "PZ": "Pz",
+                "T7": "T3",
+                "T8": "T4",
+                "T9": "T5",
+                "T10": "T6",
+                "PO1": "O1",
+                "PO2": "O2"
+            }
+            rename_safe = {old: new for old, new in rename_dict.items() if old in raw.ch_names and new not in raw.ch_names}
+
+
+            raw.rename_channels(rename_safe)
+            raw.pick_channels(
+                ["Fp1", "Fp2", "F3", "F4", "C3", "C4", "P3", "P4", "O1", "O2", "F7",
+                "F8", "T3", "T4", "T5", "T6", "Fz", "Cz", "Pz", "EKG"])  # Pick channels
+
         raw.reorder_channels(sorted(raw.ch_names))
         raw.set_channel_types({'EKG': 'ecg'})  # Change "EKG" channel to "ecg"
         raw.set_montage("standard_1020")
@@ -431,12 +464,42 @@ class EEGProcessor:
         if self.save:
             print(f"{GREEN}Saving pre-processed EEG into {YELLOW}{self.save}.h5\n{RESET}")
             with h5py.File(f"{self.save}.h5", "w") as f:
-                f.create_dataset("data", data=data_norm, compression="gzip")
+                f.create_dataset("data", data=data_norm)
             print(f"{GREEN}Saving EEG metadata into {YELLOW}{self.save}_metadata.json\n{RESET}")
             with open (f"{self.save}_metadata.json", "w") as f:
                 metadata = {"ch_names": epochs_ref.ch_names,
                             "fs": epochs_ref.info["sfreq"]}
                 json.dump(metadata, f)
+
+    
+    def labels(self):
+        filename = fd.askopenfilename(title="Select a file", filetypes=[("H5 files", "*.h5")])
+        print(f"{GREEN}Loaded file: {YELLOW}{filename}\n{RESET}")
+        with h5py.File(filename, "r") as f:
+            data = f["data"][:]
+        filename = fd.askopenfilename(
+            title="Select a file (metadata)",
+            filetypes=[("JSON files", "*.json")])
+        print(f"{GREEN}Loaded file: {YELLOW}{filename}\n{RESET}")
+        with open(filename, "r") as f:
+            metadata = json.load(f)
+            
+        self.ch_names = metadata["ch_names"]
+        self.fs = metadata["fs"]
+        info = mne.create_info(ch_names=self.ch_names, sfreq=self.fs, ch_types="eeg")
+        epochs = mne.EpochsArray(data, info)
+
+        epochs_copy = epochs.copy()
+        epochs_copy.plot(scalings="auto", block=True)
+
+        bad_idx = [i for i, log in enumerate(epochs_copy.drop_log) if log]
+
+        labels = np.zeros(len(epochs), dtype=int)
+        labels[bad_idx] = 1
+
+        if self.save:
+            print(f"{GREEN}Saving pre-processed EEG into {YELLOW}{self.save}_labels.npy\n{RESET}")
+            np.save(f"{self.save}_labels.npy", labels)
 
 
 if __name__ == "__main__":
@@ -457,3 +520,5 @@ if __name__ == "__main__":
             processor.get_features()
         case "clustering":
             processor.clustering()
+        case "labels":
+            processor.labels()

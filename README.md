@@ -58,6 +58,7 @@ python main.py -f [options]
 | `--save`, `-s`           | Ubicación de los archivos de salida                                                                                                         | Ruta o nombre                                         | None              |
 | `--visualize`, `-v`      | Mostrar todos los plots durante la ejecución                                                                                                | -                                                     | False             |
 | `--plot_f`               | Mostrar únicamente plots finales (después de re-referenciar, visualización clusters y plot del EEG etiquetado) | -                                                     | False             |
+| `--var_selection` | Seleccionar tipos de características para calcular (lista) | `statistical`, `autocorrelation`, `band_power`, `entropy`, `hjorth`, `fractal`, `bispectrum`, `wavelets`, `functional_connectivity` | None (todas las características)
 
 ### Plots disponibles para visualizar
 - EEG crudo
@@ -80,6 +81,7 @@ python main.py -f [options]
 - Etiquetas (.csv): `nombre`_cluster_labels.csv
 - Array (n_epochs, n_channels, n_times) (.h5): `nombre`.h5
 - Metadatos Array (.json): `nombre`_metadata.json
+- Etiquetas ground truth (.npy): `nombre`_labels.npy
 
 ## Ejemplos de uso
 #### Ejecutar pipeline completa: Montaje average, 10 segundos de epoch, mostrar todos los plots, reducción de canales por media (no guardar)
@@ -101,7 +103,12 @@ python main.py -f correct --sel_ecg -m laplacian -d 2 --plot_f -s ruta/nombre
 ```bash
 python main.py -f features -s nombre
 ```
-Es posible importar los datos desde .fif o .h5. Si se importa desde .fif, es necesario añadir el argumento `-m` o `--montage`, si no, por defecto se aplica el montaje average. 
+Es posible importar los datos desde .fif o .h5. Si se importa desde .fif, es necesario añadir el argumento `-m` o `--montage`, si no, por defecto se aplica el montaje average.
+
+#### Extraer características: Únicamente estadísticas, banda de frecuencia y conectividad funcional
+```bash
+python main.py -f features --var_selection statistical band_power functional_connectivity
+```
 
 #### Realizar el clustering: Visualizar todos los plots y no guardar
 ```bash
