@@ -15,6 +15,23 @@ YELLOW = Fore.YELLOW
 CYAN = Fore.LIGHTCYAN_EX
 RESET = Style.RESET_ALL
 
+GOOD_CHANNELS = [
+    "Fp1", "Fp2", "F3", "F4", "C3", "C4", "P3", "P4", "O1", "O2", "F7", "F8",
+    "T3", "T4", "T5", "T6", "Fz", "Cz", "Pz", "EKG"
+    ]
+RENAME_DICT_BIPOLAR = {
+    'EEG Fp1-Ref': "Fp1", 'EEG Fp2-Ref': "Fp2", 'EEG F3-Ref': "F3",
+    'EEG F4-Ref': "F4", 'EEG C3-Ref': "C3", 'EEG C4-Ref': "C4",
+    'EEG P3-Ref': "P3", 'EEG P4-Ref': "P4", 'EEG O1-Ref': "O1",
+    'EEG O2-Ref': "O2", 'EEG F7-Ref': "F7", 'EEG F8-Ref': "F8",
+    'EEG T7-Ref': "T3", 'EEG T8-Ref': "T4", 'EEG P7-Ref': "T5",
+    'EEG P8-Ref': "T6", 'EEG Fz-Ref': "Fz", 'EEG Cz-Ref': "Cz",
+    'EEG Pz-Ref': "Pz", 'ECG LA-RA': "EKG"
+    }
+RENAME_DICT_EXTENDED = {
+    "FP1": "Fp1", "FP2": "Fp2", "FZ": "Fz", "CZ": "Cz", "PZ": "Pz",
+    "T7": "T3", "T8": "T4", "T9": "T5", "T10": "T6", "PO1": "O1", "PO2": "O2"
+    }
 
 BIPOLAR_PAIRS = [("Fp1", "F7"), ("F7", "T3"), ("T3", "T5"), ("T5", "O1"),  # Left Temporal Chain
                  ("Fp2", "F8"), ("F8", "T4"), ("T4", "T6"), ("T4", "O2"),  # Right Temporal Chain
@@ -44,3 +61,5 @@ FRONTAL_CHANNELS = ['Fp1', 'Fp2', 'F3', 'F4', 'F7', 'F8', 'Fz']
 POSTERIOR_CHANNELS = ['P3', 'P4', 'O1', 'O2', 'Pz', "T5", "T6"]
 TEMPORAL_CHANNELS = ['T3', 'T4', 'T5', 'T6']
 OCCIPITAL_CHANNELS = ["O1", "O2"]
+
+DESIRED_ORDER = ["Fp1", "Fp2", "F3", "F4", "C3", "C4", "P3", "P4", "O1", "O2", "F7", "F8", "T3", "T4", "T5", "T6", "Fz", "Cz", "Pz"]
