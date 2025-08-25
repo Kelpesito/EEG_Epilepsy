@@ -12,20 +12,17 @@ Script for EEG processing:
 # ---------- Imports ----------
 
 import argparse
-from functools import wraps
 import json
 import os
 import re
-import time
 from tkinter import filedialog as fd
-from typing import Any, Callable, Optional
+from typing import Callable
 import warnings
 
 from autoreject import AutoReject, RejectLog
 from colorama import init
 import h5py
 import hdbscan
-import matplotlib as mpl
 from matplotlib.axes import Axes
 from matplotlib.colors import Colormap
 from matplotlib.figure import Figure
@@ -41,13 +38,14 @@ import seaborn as sns
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import balanced_accuracy_score, silhouette_score
-from sklearn.model_selection import ParameterGrid, train_test_split
+from sklearn.metrics import balanced_accuracy_score
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
-import umap
+from tqdm import tqdm
 
 from constants import *
 from features import *
+from misc import *
 
 
 # ---------- Warnings ----------
@@ -81,6 +79,16 @@ warnings.filterwarnings(
     "ignore",
     category=RuntimeWarning,
     message=".*divide by zero.*"
+)
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    message=".*Spectral initialisation failed.*",
+)
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    message=".*KMeans is known to have a memory leak.*",
 )
 
 
@@ -182,42 +190,6 @@ def parse_args() -> argparse.Namespace:
     
     return parser.parse_args()
 
-
-# ---------- Misc functions ----------
-
-def measure_time(
-        alias: str | None = None
-    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """
-    Decorator to measure the execution time of a function.
-
-    Parameters
-    -----------
-        alias: str | None, optional
-            Optional name to display instead of function's name.
-
-    Returns
-    --------
-        decorator: function
-            The wrapped function with execution time printing.
-    """
-    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            ini: float = time.time()  # Current time at start
-            x: Any = func(*args, **kwargs)  # Function execution
-            fin: float = time.time()  # Current time at finishing
-            name: str = alias if alias else func.__name__
-            # Conversion of duration to mins, secs
-            mins: float; segs: float
-            mins, segs = divmod(fin-ini, 60)  
-            print(
-                f"{GREEN}Execution time of {YELLOW}{name}{GREEN}: "
-                f"{YELLOW}{int(mins)} min {segs:.2f} s\n{RESET}"
-            )
-            return x
-        return wrapper
-    return decorator
 
 
 # ---------- EEG processor ----------
@@ -332,7 +304,7 @@ class EEGProcessor:
         self.fs: float | None = None
         
 
-    # ---------- Helpers ----------
+    # ---------- Data loading ----------
 
     def load_eeg(self) -> mne.io.Raw:
         """
@@ -414,6 +386,79 @@ class EEGProcessor:
         return raw
     
 
+    def open_signal_fif_h5(self) -> np.ndarray:
+        """
+        If there is no corrected, normalized signal in memory (because the
+        program is not running at run mode), the signal has to be loaded.
+
+        There are two options for loading the signal:
+        - .fif: corrected EEG Epochs object, needs to be pre-processed
+        (re-referenced and normalized).
+        - .h5: Corrected and normalized signal, needs to import the metadata
+        (.json) too.
+
+        Returns
+        -------
+            data_norm: np.ndarray
+                Corrected, re-referenced and normalized signal.
+        """
+        filename: str = fd.askopenfilename(
+            title="Select a file",
+            filetypes=[("FIF files", "*.fif"), ("H5 files", "*.h5")]
+        )
+        print(f"{GREEN}Loaded file: {YELLOW}{filename}\n{RESET}")
+        if ".fif" in filename:
+            epochs: mne.Epochs = mne.read_epochs(filename, preload=True)
+            data_norm: np.ndarray = self.pre_process(epochs)
+        else:
+            with h5py.File(filename, "r") as f:
+                data_norm: np.ndarray = f["data"][:]
+            filename: str = fd.askopenfilename(
+                title="Select a file (metadata)",
+                filetypes=[("JSON files", "*.json")]
+            )
+            print(f"{GREEN}Loaded file: {YELLOW}{filename}\n{RESET}")
+            with open(filename, "r") as f:
+                metadata: dict = json.load(f)
+                self.ch_names: list[str] = metadata["ch_names"]
+                self.fs: float = metadata["fs"]
+        
+        return data_norm
+    
+
+    def open_h5(self):
+        """
+        Open a .h5 file.
+
+        Returns
+        --------
+            data: np.ndarray
+                Array containing EEG signal with shape
+                (n_epochs, n_channels, n_times).
+        """
+        filename: str = fd.askopenfilename(
+            title="Select a file", filetypes=[("H5 files", "*.h5")]
+        )
+        print(f"{GREEN}Loaded file: {YELLOW}{filename}\n{RESET}")
+        with h5py.File(filename, "r") as f:
+            data: np.ndarray = f["data"][:]
+        
+        filename: str = fd.askopenfilename(
+            title="Select a file (metadata)",
+            filetypes=[("JSON files", "*.json")]
+        )
+        print(f"{GREEN}Loaded file: {YELLOW}{filename}\n{RESET}")
+        with open(filename, "r") as f:
+            metadata: dict[str, list[str] | float] = json.load(f)
+            
+        self.ch_names: list[str] = metadata["ch_names"]
+        self.fs: float = metadata["fs"]
+        
+        return data
+    
+
+    # Pre-processing
+    
     def pre_filter_raw(
             self,
             raw: mne.io.Raw,
@@ -515,7 +560,7 @@ class EEGProcessor:
                 Epochs object with ICA applied.
         """
         # Create instance of ICA
-        ica: mne.preprocessing.ICA  = mne.preprocessing.ICA(random_state=25)
+        ica: ICA  = ICA(random_state=25)
         ica.fit(epochs[~reject_log.bad_epochs])
         
         # Plot ICA components
@@ -672,25 +717,31 @@ class EEGProcessor:
         return epochs_ref
     
 
-    def normalize(self, data: np.ndarray) -> np.ndarray:
+    def pre_process(self, epochs: mne.Epochs) -> np.ndarray:
         """
-        Normalizes an array:
-        x_norm = (x - mean) / std
+        Perform the pre-processing of a fixed Epochs object:
+        1. Set reference
+        2. Save channel names and sample frequency
+        3. Normalize data
 
         Parameters
-        -----------
-            data: np.ndarray
-                Array to normalize.
+        ----------
+            epochs: mne.Epochs
+                Fixed Epochs Object
         
         Returns
         -------
-            np.ndarray
-                Normalized array
+            data_norm: np.ndarray 
+                Array of shape (n_epochs, n_channels, n_times) normalized by
+                epoch.
         """
-        print(f"{GREEN}Standardizing data{RESET}")
-        mean: np.ndarray = data.mean(axis=(1, 2), keepdims=True)
-        std: np.ndarray = data.std(axis=(1, 2), keepdims=True)
-        return (data - mean)/std
+        epochs_ref: mne.Epochs = self.set_reference(epochs)  # Set reference
+        self.ch_names: list[str] = epochs_ref.ch_names
+        self.fs: float = epochs_ref.info["sfreq"]
+        data: np.ndarray = epochs_ref.get_data()
+        data_norm: np.ndarray = normalize(data)  # Data normalization
+
+        return data_norm
     
 
     def save_correct(
@@ -727,198 +778,9 @@ class EEGProcessor:
             }
             json.dump(metadata, f)
 
+
+    # ---------- Clustering ----------
     
-    def pre_process(self, epochs: mne.Epochs) -> np.ndarray:
-        """
-        Perform the pre-processing of a fixed Epochs object:
-        1. Set reference
-        2. Save channel names and sample frequency
-        3. Normalize data
-
-        Parameters
-        ----------
-            epochs: mne.Epochs
-                Fixed Epochs Object
-        
-        Returns
-        -------
-            data_norm: np.ndarray 
-                Array of shape (n_epochs, n_channels, n_times) normalized by
-                epoch.
-        """
-        epochs_ref: mne.Epochs = self.set_reference(epochs)  # Set reference
-        self.ch_names: list[str] = epochs_ref.ch_names
-        self.fs: float = epochs_ref.info["sfreq"]
-        data: np.ndarray = epochs_ref.get_data()
-        data_norm: np.ndarray = self.normalize(data)  # Data normalization
-
-        return data_norm
-
-    
-    def open_signal_fif_h5(self) -> np.ndarray:
-        """
-        If there is no corrected, normalized signal in memory (because the
-        program is not running at run mode), the signal has to be loaded.
-
-        There are two options for loading the signal:
-        - .fif: corrected EEG Epochs object, needs to be pre-processed
-        (re-referenced and normalized).
-        - .h5: Corrected and normalized signal, needs to import the metadata
-        (.json) too.
-
-        Returns
-        -------
-            data_norm: np.ndarray
-                Corrected, re-referenced and normalized signal.
-        """
-        filename: str = fd.askopenfilename(
-            title="Select a file",
-            filetypes=[("FIF files", "*.fif"), ("H5 files", "*.h5")]
-        )
-        print(f"{GREEN}Loaded file: {YELLOW}{filename}\n{RESET}")
-        if ".fif" in filename:
-            epochs: mne.Epochs = mne.read_epochs(filename, preload=True)
-            data_norm: np.ndarray = self.pre_process(epochs)
-        else:
-            with h5py.File(filename, "r") as f:
-                data_norm: np.ndarray = f["data"][:]
-            filename: str = fd.askopenfilename(
-                title="Select a file (metadata)",
-                filetypes=[("JSON files", "*.json")]
-            )
-            print(f"{GREEN}Loaded file: {YELLOW}{filename}\n{RESET}")
-            with open(filename, "r") as f:
-                metadata: dict = json.load(f)
-                self.ch_names: list[str] = metadata["ch_names"]
-                self.fs: float = metadata["fs"]
-        
-        return data_norm
-    
-
-    def open_csv(self) -> pd.DataFrame:
-        """
-        Import a .csv file into a DataFrame.
-
-        Returns
-        -------
-            X: pd.DataFrame
-                Loaded DataFrame from .csv file
-        """
-        filename: str = fd.askopenfilename(
-            title="Select a file",
-            filetypes=[("CSV files", "*.csv")]
-        )
-        print(f"{GREEN}Loaded file: {YELLOW}{filename}\n{RESET}")
-        X: pd.DataFrame = pd.read_csv(filename, index_col=0)
-
-        return X
-    
-
-    def clustering_grid_search(
-            self,
-            X_scaled: np.ndarray,
-            random_state: int = 28
-        ) -> tuple[
-            np.ndarray | None, np.ndarray | None, hdbscan.HDBSCAN | None
-        ]:
-        """
-        Perform a grid search calculation of UMAP + HDBSCAN parameters with
-        silhouette score as objective metric. The parameters tested in the
-        grid search are:
-        - UMAP:
-            - n_neighbours: [2, 3, 5, 10, 20, 50]
-            - min_dist: [0, 0.1, 0.2, 0.5, 1, 2]
-            - n_components: [2, 5, 10, 30, 70, 100]
-        - HDBSCAN:
-            - min_cluster_size: [5, 10, 20, 50, 75, 100]
-            - cluster_selection_epsilon: [0, 0.02, 0.05, 0.1, 0.2, 0.5]
-
-        Parameters
-        ----------
-            X_scaled: np.ndarray
-                Scaled feature matrix
-            random_state: np.int
-                Seed for random processes
-        
-        Returns
-        -------
-            best_labels: np.ndarray | None
-                Array with the best predicted labels
-            best_embedding: np.ndarray | None
-                Array with the best embedded input matrix
-            best_clusterer: hdbscan.HDBSCAN | None
-                Best HDBSCAN clusterer object
-        """
-        param_grid: dict[str, list[int | float]] = {
-            "umap__n_neighbours": [2, 3, 5, 10, 20, 50],
-            "umap__min_dist": [0, 0.1, 0.2, 0.3, 0.5, 0.7],
-            "umap__n_components": [2, 5, 10, 30, 70, 100],
-            "hdbscan__min_cluster_size": [5, 10, 20, 50, 75, 100],
-            "hdbscan__cluster_selection_epsilon": [
-                0, 0.02, 0.05, 0.1, 0.2, 0.5
-            ]
-        }
-        param_grid: ParameterGrid = ParameterGrid(param_grid)
-
-        best_score: float = -1.
-        best_config: dict[str, int | float] | None = None
-        best_labels: np.ndarray | None = None
-        best_embedding: np.ndarray | None = None
-        best_clusterer: hdbscan.HDBSCAN | None = None
-        for params in tqdm(
-            param_grid,
-            desc=f"{CYAN}UMAP + HDBCAN grid search{RESET}",
-            colour="cyan"
-        ):
-            try:
-                # UMAP
-                reducer: umap.UMAP = umap.UMAP(
-                    n_neighbors=params["umap__n_neighbours"],
-                    min_dist=params["umap__min_dist"],
-                    n_components=params["umap__n_components"],
-                )
-                embedding: np.ndarray = reducer.fit_transform(X_scaled)
-
-                # HDBSCAN
-                clusterer: hdbscan.HDBSCAN = hdbscan.HDBSCAN(
-                    min_cluster_size=params["hdbscan__min_cluster_size"],
-                    cluster_selection_epsilon=params[
-                        "hdbscan__cluster_selection_epsilon"
-                    ],
-                )
-
-                # Labels
-                labels: np.ndarray = clusterer.fit_predict(embedding)
-
-                # Discard only one cluster
-                if len(set(labels)) <= 1 or (labels == -1).all():
-                    continue
-
-                # Calculate score
-                score: float = silhouette_score(embedding, labels)
-
-                if score > best_score:
-                    best_score: float = score
-                    best_config: dict[str, int | float] = params
-                    best_labels: np.ndarray = labels
-                    best_embedding: np.ndarray = embedding
-                    best_clusterer: hdbscan.HDBSCAN = clusterer
-
-                    # Print new bes score
-                    print("\n New best score")
-                    colored_items: list[str] = []
-                    for k, v in best_config.items():
-                        colored_items.append(f"{k} = {v}")
-                    colored_dict_str: str = ", ".join(colored_items)
-                    print(f"{colored_dict_str}:")
-                    print(f"Silhouette score = {best_score}")
-            
-            except Exception as e:
-                continue
-        
-        return best_labels, best_embedding, best_clusterer
-    
-
     def plot_classified_epochs(self, best_labels: np.ndarray) -> None:
         """
         Plot in different figures, the Epochs for each classification.
@@ -956,6 +818,8 @@ class EEGProcessor:
         plt.show(block=True)
 
 
+    # ---------- Comparative analysis ----------
+
     def versus_pca(
             self, features_scaled: np.ndarray, y_true: np.ndarray) -> None:
         """
@@ -979,6 +843,9 @@ class EEGProcessor:
         # K-Means clustering
         kmeans: KMeans = KMeans(n_clusters=2, random_state=198)
         y_kmeans: np.ndarray = kmeans.fit_predict(X_pca)
+        
+        # Score calculations
+        clustering_scores(X_pca, y_kmeans)
 
         # Plot of clustering:
         plt.figure(figsize=(8,6))
@@ -1185,24 +1052,6 @@ class EEGProcessor:
             if self.save:
                 plt.savefig(f"{self.save}_top_features_{i+1}.png", dpi=300)
             plt.show()
-
-    
-    def open_fif(self) -> mne.Epochs:
-        """
-        Open a .fif file into Epochs object.
-
-        Returns
-        --------
-            epochs: mne.Epochs
-                Epochs object containing EEG divided in epochs
-        """
-        filename: str = fd.askopenfilename(
-            title="Select a file", filetypes=[("FIF files", "*.fif")]
-        )
-        epochs: mne.Epochs = mne.read_epochs(filename)
-        print(f"{GREEN}Loaded file: {YELLOW}{filename}{RESET}")
-
-        return epochs
     
 
     def calc_psd(self, epochs: mne.Epochs, n: int | str) -> dict[str, float]:
@@ -1250,7 +1099,7 @@ class EEGProcessor:
             band_power: np.ndarray = psd_data[:, :, idx_band].sum(axis=2)
             rbp[band] = (band_power / total_power.squeeze()).mean()
 
-        rbp["total"] = total_power.squeeze().mean()
+        rbp["total"] = total_power.squeeze().mean() * 10**6
         
         return rbp
     
@@ -1423,37 +1272,6 @@ class EEGProcessor:
         self.plot_functional_connectivity(
             delta_matrix, "delta", cmap="coolwarm"
         )
-        
-    
-    def open_h5(self):
-        """
-        Open a .h5 file.
-
-        Returns
-        --------
-            data: np.ndarray
-                Array containing EEG signal with shape
-                (n_epochs, n_channels, n_times).
-        """
-        filename: str = fd.askopenfilename(
-            title="Select a file", filetypes=[("H5 files", "*.h5")]
-        )
-        print(f"{GREEN}Loaded file: {YELLOW}{filename}\n{RESET}")
-        with h5py.File(filename, "r") as f:
-            data: np.ndarray = f["data"][:]
-        
-        filename: str = fd.askopenfilename(
-            title="Select a file (metadata)",
-            filetypes=[("JSON files", "*.json")]
-        )
-        print(f"{GREEN}Loaded file: {YELLOW}{filename}\n{RESET}")
-        with open(filename, "r") as f:
-            metadata: dict[str, list[str] | float] = json.load(f)
-            
-        self.ch_names: list[str] = metadata["ch_names"]
-        self.fs: float = metadata["fs"]
-        
-        return data
 
 
     # ---------- Main functions ----------
@@ -1485,7 +1303,7 @@ class EEGProcessor:
         # Re-reference channels
         epochs_ref: mne.Epochs = self.set_reference(epochs_clean)  
         data: np.ndarray = epochs_ref.get_data()
-        data_norm: np.ndarray = self.normalize(data)  # Normalize data
+        data_norm: np.ndarray = normalize(data)  # Normalize data
 
         # Save data
         if self.save:
@@ -1553,7 +1371,7 @@ class EEGProcessor:
                 }
                 
                 # Calculate features
-                feature_metric: dict[str, np.ndarray] = calc_feature(
+                feature_metric: dict[str, list[float]] = calc_feature(
                     data_norm, **kwargs
                 )
                 
@@ -1606,7 +1424,7 @@ class EEGProcessor:
         print(f"{GREEN}Clustering Features:\n{RESET}")
         # If there is no X in memory, load it.
         if X is None:
-            X = self.open_csv()
+            X = open_csv()
 
         # Standardize
         scaler: StandardScaler = StandardScaler()
@@ -1618,7 +1436,10 @@ class EEGProcessor:
         best_clusterer: hdbscan.HDBSCAN
         (best_labels,
         best_embedding,
-        best_clusterer) = self.clustering_grid_search(X_scaled, random_state)
+        best_clusterer) = clustering_grid_search(X_scaled, random_state)
+        
+        # Score calculations
+        clustering_scores(best_embedding, best_labels)
 
         # Plot dendogram
         if self.visualize:
@@ -1685,13 +1506,13 @@ class EEGProcessor:
         - Plot comparisons (spectra, topomap, functional matrix)
         """
         # Load features matrix (pre and post)
-        X1: pd.DataFrame = self.open_csv()
-        X2: pd.DataFrame = self.open_csv()
+        X1: pd.DataFrame = open_csv()
+        X2: pd.DataFrame = open_csv()
 
         # Create label column and join
         X1["label"] = "EEG1"
         X2["label"] = "EEG2"
-        X = pd.concat([X1, X2], ignore_index=True)
+        X: pd.DataFrame = pd.concat([X1, X2], ignore_index=True)
 
         # Standardize data
         features: pd.DataFrame = X.drop(columns="label")
@@ -1711,8 +1532,8 @@ class EEGProcessor:
         self.versus_plot_top_features(features, X["label"], importances_df)
 
         # Load EEG epochs
-        epochs1: mne.Epochs = self.open_fif()
-        epochs2: mne.Epochs = self.open_fif()
+        epochs1: mne.Epochs = open_fif()
+        epochs2: mne.Epochs = open_fif()
 
         # Plot comparisons (spectra, topomap, functional matrix)
         self.versus_figs(epochs1, epochs2)
