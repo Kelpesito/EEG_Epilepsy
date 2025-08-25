@@ -12,13 +12,26 @@ Este proyecto proporciona herramientas para visualizar, procesar y extraer carac
 
 ## Instalación
 
-Primero, instalar las dependencias con (es altamente recomendado hacerlo con conda):
+1. Crear un entorno virtual con conda en la versión 3.13.5.
+```bash
+conda create -n EEGpip python=3.13.5
+```
+2. Activar el entorno virtual.
+```bash
+conda activate EEGpip
+```
+3. Desplazarse hasta la carpeta del proyecto.
+```bash
+cd 'carpeta/del/proyecto'
+```
+4. Instalar las dependencias:
 ```bash
 pip install -r requirements.txt
-```
-Hay una dependencia que no se puede instalar con pip. Para instalarla:
-```bash
 conda install -c conda-forge hdbscan
+```
+5. Instalar setup
+```bash
+pip install --editable .
 ```
 
 ### Requisitos
@@ -44,7 +57,7 @@ conda install -c conda-forge hdbscan
 
 ## Uso
 ```bash
-python main.py -f [options]
+EEGpip [options]
 ```
 
 ### Opciones disponibles
@@ -86,32 +99,32 @@ python main.py -f [options]
 ## Ejemplos de uso
 #### Ejecutar pipeline completa: Montaje average, 10 segundos de epoch, mostrar todos los plots, reducción de canales por media (no guardar)
 ```bash
-python main.py -v -r average
+EEGpip -v -r average
 ```
 
 #### Inspeccionar EEG (mostrar pre y post filtrado)
 ```bash
-python main.py -f inspect
+EEGpip -f inspect
 ```
 
 #### Corregir artefactos: Seleccionar ECG, montaje laplaciano, 2 segundos de epoch, ver solo plots finales y guardar
 ```bash
-python main.py -f correct --sel_ecg -m laplacian -d 2 --plot_f -s ruta/nombre
+EEGpip -f correct --sel_ecg -m laplacian -d 2 --plot_f -s ruta/nombre
 ```
 
 #### Extraer características: Sin reducción de canales, guardar
 ```bash
-python main.py -f features -s nombre
+EEGpip -f features -s nombre
 ```
 Es posible importar los datos desde .fif o .h5. Si se importa desde .fif, es necesario añadir el argumento `-m` o `--montage`, si no, por defecto se aplica el montaje average.
 
 #### Extraer características: Únicamente estadísticas, banda de frecuencia y conectividad funcional
 ```bash
-python main.py -f features --var_selection statistical band_power functional_connectivity
+EEGpip -f features --var_selection statistical band_power functional_connectivity
 ```
 
 #### Realizar el clustering: Visualizar todos los plots y no guardar
 ```bash
-python main.py -f clustering -v
+EEGpip main.py -f clustering -v
 ```
 Si se desea visualizar el EEG final (`-v`, `--visualize` o `--plot_f`), y se importa el archivo desde .fif, es necesario añadir el argumento `-m` o `--montage`, si no, por defecto se aplica el montaje average.
