@@ -125,6 +125,6 @@ EEGpip -f features --var_selection statistical band_power functional_connectivit
 
 #### Realizar el clustering: Visualizar todos los plots y no guardar
 ```bash
-EEGpip main.py -f clustering -v
+EEGpip -f clustering -v
 ```
 Si se desea visualizar el EEG final (`-v`, `--visualize` o `--plot_f`), y se importa el archivo desde .fif, es necesario añadir el argumento `-m` o `--montage`, si no, por defecto se aplica el montaje average.
