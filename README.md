@@ -26,8 +26,8 @@ cd 'carpeta/del/proyecto'
 ```
 4. Instalar las dependencias:
 ```bash
-pip install -r requirements.txt
 conda install -c conda-forge hdbscan
+pip install -r requirements.txt
 ```
 5. Instalar setup
 ```bash
