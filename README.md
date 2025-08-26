@@ -182,3 +182,6 @@ EEGpip -f versus
 #### Etiquetado manual de EEG, guardando
 ```bash
 EEGpip -f labels -s ruta/nombre
+
+
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Kelpesito/EEG_Epilepsy)
